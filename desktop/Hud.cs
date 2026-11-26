@@ -99,7 +99,7 @@ internal sealed partial class HudReader
 {
     private OcrEngine? _engine;
 
-    internal async Task<HudReading> ReadAsync(Bitmap frame, IReadOnlyDictionary<HudField, Zone> zones)
+    internal async Task<HudReading> ReadAsync(Bitmap frame, IReadOnlyDictionary<HudField, Zone> zones, bool resourceBar = false)
     {
         _engine ??= OcrEngine.TryCreateFromUserProfileLanguages() ??
             OcrEngine.AvailableRecognizerLanguages.Select(OcrEngine.TryCreateFromLanguage).FirstOrDefault(engine => engine is not null)
@@ -107,13 +107,18 @@ internal sealed partial class HudReader
         var text = new Dictionary<HudField, string>();
         foreach (var (field, zone) in zones)
         {
+            if (resourceBar && field == HudField.Age) continue;
             var area = zone.At(frame.Size);
             if (area.Width < 5 || area.Height < 5) continue;
+            bool counter = resourceBar && field != HudField.Age;
+            using var prepared = counter ? PrepareCounter(frame, area) : null;
+            var source = prepared ?? frame;
+            if (prepared is not null) area = new Rectangle(Point.Empty, prepared.Size);
             using var resized = new Bitmap(area.Width * 3, area.Height * 3);
             using (var g = Graphics.FromImage(resized))
             {
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(frame, new Rectangle(Point.Empty, resized.Size), area, GraphicsUnit.Pixel);
+                g.DrawImage(source, new Rectangle(Point.Empty, resized.Size), area, GraphicsUnit.Pixel);
             }
             using var png = new MemoryStream();
             resized.Save(png, System.Drawing.Imaging.ImageFormat.Png);
@@ -127,9 +132,48 @@ internal sealed partial class HudReader
             input.Seek(0);
             var decoder = await BitmapDecoder.CreateAsync(input);
             using var software = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore);
-            text[field] = (await _engine.RecognizeAsync(software)).Text;
+            var recognized = (await _engine.RecognizeAsync(software)).Text;
+            text[field] = counter ? CounterText().Match(recognized).Groups[1].Value : recognized;
         }
         return Parse(text);
+    }
+
+    private static Bitmap PrepareCounter(Bitmap frame, Rectangle area)
+    {
+        const int height = 25;
+        int width = Math.Max(5, (int)Math.Round(area.Width * (double)height / area.Height));
+        using var crop = new Bitmap(width, height);
+        using (var graphics = Graphics.FromImage(crop))
+        {
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(frame, new Rectangle(0, 0, width, height), area, GraphicsUnit.Pixel);
+        }
+
+        // OCR more reliably recognizes isolated digits when they are part of a text line.
+        var panel = new Bitmap(width + 120, 60);
+        using var paper = Graphics.FromImage(panel);
+        using var font = new Font("Segoe UI", 20, FontStyle.Regular, GraphicsUnit.Pixel);
+        paper.Clear(Color.White);
+        paper.DrawString("HUD", font, Brushes.Black, 3, 17);
+        int target = 59, blank = 0;
+        var ink = new bool[height];
+        for (int x = 0; x < width; x++)
+        {
+            bool hasInk = false;
+            for (int y = 0; y < height; y++)
+            {
+                var pixel = crop.GetPixel(x, y);
+                ink[y] = (pixel.R + pixel.G + pixel.B) / 3 > 145;
+                hasInk |= ink[y];
+            }
+            if (hasInk) blank = 0;
+            else if (++blank >= 3) continue;
+            for (int y = 0; y < height; y++)
+                if (ink[y]) panel.SetPixel(target, 18 + y, Color.Black);
+            target++;
+        }
+        paper.DrawString(" END", font, Brushes.Black, target + 4, 17);
+        return panel;
     }
 
     internal static HudReading Parse(IReadOnlyDictionary<HudField, string> text)
@@ -172,4 +216,7 @@ internal sealed partial class HudReader
 
     [GeneratedRegex(@"^(?:[0-9]+|[0-9]{1,3}(?:[.,\s][0-9]{3})+)$", RegexOptions.CultureInvariant)]
     private static partial Regex NumberText();
+
+    [GeneratedRegex(@"\bHUD\s+(.+?)\s+END\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex CounterText();
 }

@@ -19,7 +19,8 @@ internal sealed class MatchForm : Form
         Font = new Font("Segoe UI", 10);
 
         Tab("Partida");
-        Choice("age", "Era atual", [("1", "Arcaica"), ("2", "Clássica"), ("3", "Heroica"), ("4", "Mítica"), ("5", "Maravilha")]);
+        var ages = new (string, string)[] { ("1", "Arcaica"), ("2", "Clássica"), ("3", "Heroica"), ("4", "Mítica"), ("5", "Maravilha") };
+        Choice("age", "Era atual", advisor.AgeKnown ? ages : [("", "Aguardando leitura"), .. ages]);
         Choice("advance", "Avanço de era", [("saving", "Juntando recursos"), ("ready", "Recursos suficientes"), ("researching", "Em andamento")]);
         Number("citizens", "Aldeões · valor manual", 300);
         Number("used", "População usada · valor manual");
@@ -95,12 +96,16 @@ internal sealed class MatchForm : Form
         var select = new ComboBox { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = name };
         select.Items.AddRange(options.Select(option => (object)option.Label).ToArray());
         var current = _advisor.State[key]?.ToString();
+        if (key == "age" && !_advisor.AgeKnown) current = "";
         select.SelectedIndex = Math.Max(0, Array.FindIndex(options, option => option.Value == current));
         AddLabelAndControl(name, select);
         _apply.Add(() =>
         {
             var value = options[select.SelectedIndex].Value;
-            if (key == "age") _advisor.SetAge(int.Parse(value));
+            if (key == "age")
+            {
+                if (value != current && int.TryParse(value, out int age)) _advisor.SetAge(age);
+            }
             else _advisor.State[key] = value;
         });
     }

@@ -52,6 +52,7 @@ const GaiaAdvisor = (() => {
   };
 
   const ageCosts = { 1: [400, 0, 0], 2: [800, 0, 500], 3: [1200, 0, 1200] };
+  const priorityBudget = 20;
   const resources = ['comida', 'madeira', 'ouro'];
   const stock = s => [s.stockFood, s.stockWood, s.stockGold];
   const deficits = (costs, bank) => costs.map((cost, index) =>
@@ -288,7 +289,8 @@ const GaiaAdvisor = (() => {
     }
     if (free < 3 && s.housing === 'capped' && s.age >= 3)
       reason += ' Se a economia já sustenta os reforços, considere pausar a Autoqueue para parar de disputar vagas com o exército.';
-    return { percentages, counts: staffing(s.citizens, percentages), reason };
+    const points = staffing(priorityBudget, percentages);
+    return { points, reason };
   }
 
   function recommend(s) {

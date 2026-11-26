@@ -8,10 +8,12 @@ internal sealed class MainForm : Form
     private static readonly Color Muted = Color.FromArgb(180, 195, 185);
     private static readonly Color Accent = Color.FromArgb(238, 199, 131);
     private readonly Advisor _advisor = new();
-    private readonly HudReader _reader = new();
+    private readonly HudReader _reader;
+    private readonly AutomaticHud _automaticHud;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1250 };
     private readonly Label _status = Readout("Aguardando leitura", Muted);
     private readonly Label _hud = Readout("", Muted);
+    private readonly Label _age = Readout("", Ink, 10, FontStyle.Bold);
     private readonly Label _action = Readout("", Accent, 18, FontStyle.Bold);
     private readonly Label _reason = Readout("", Ink);
     private readonly Label _economy = Readout("", Accent, 12, FontStyle.Bold);
@@ -20,7 +22,7 @@ internal sealed class MainForm : Form
     private readonly Label _attack = Readout("", Ink);
     private readonly Button _mark = Button("Registrar ação");
     private readonly Button _completed = Button("Centro concluído");
-    private readonly Button _calibration = Button("Calibrar HUD");
+    private readonly Button _calibration = Button("Ajustar HUD");
     private HudProfile? _profile = HudProfile.Load();
     private HudReading? _observed;
     private bool _reading, _calibrating;
@@ -29,6 +31,8 @@ internal sealed class MainForm : Form
 
     internal MainForm()
     {
+        _reader = new HudReader();
+        _automaticHud = new AutomaticHud(_reader);
         Text = "AoMR Helper · Gaia";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(435, 500);
@@ -88,9 +92,9 @@ internal sealed class MainForm : Form
 
         content.Controls.AddRange([
             Readout("AoMR Helper", Ink, 24, FontStyle.Bold),
-            tools, _status, _hud,
+            tools, _status, _hud, _age,
             Heading("FAÇA AGORA"), _action, _reason, _mark, _completed,
-            Heading("PRIORIDADE PERSONALIZADA"), _economy, _economyReason,
+            Heading("PRIORIDADE PERSONALIZADA · 20 PONTOS"), _economy, _economyReason,
             Heading("COMPOSIÇÃO DO EXÉRCITO"), _army,
             Heading("QUANDO ATACAR"), _attack,
         ]);
@@ -104,14 +108,14 @@ internal sealed class MainForm : Form
         };
         _timer.Tick += async (_, _) => await ReadFrame();
         FormClosed += (_, _) => _timer.Dispose();
-        _status.Text = _profile is null ? "Configure o HUD durante uma partida." : "Aguardando a janela do jogo.";
+        _status.Text = "Aguardando a janela do jogo para ler o HUD automaticamente.";
         RefreshAdvice();
         _timer.Start();
     }
 
     private async Task ReadFrame()
     {
-        if (_reading || _calibrating || _profile is null || IsDisposed) return;
+        if (_reading || _calibrating || IsDisposed) return;
         _reading = true;
         try
         {
@@ -122,29 +126,24 @@ internal sealed class MainForm : Form
                 _status.Text = _observed is null ? "Aguardando a janela do AoMR." : "Leitura pausada · última amostra abaixo.";
                 return;
             }
-            if (frame.Size != _profile.Resolution)
-            {
-                _status.Text = "A resolução do jogo mudou. Calibre o HUD novamente.";
-                InvalidateHud();
-                return;
-            }
-            var read = await _reader.ReadAsync(frame, _profile.Zones);
+            var read = await _automaticHud.ScanAsync(frame);
+            var automatic = read is not null;
+            if (read is null && _profile?.Resolution == frame.Size)
+                read = await _reader.ReadAsync(frame, _profile.Zones);
             if (IsDisposed || _calibrating) return;
-            if (!read.HasValues)
+            if (read is null || !read.HasValues)
             {
-                _status.Text = "HUD sem leitura. Verifique se a partida e as áreas calibradas estão visíveis.";
+                _status.Text = "Procurando a barra de recursos. Deixe a partida visível com o HUD no topo.";
                 InvalidateHud();
                 return;
             }
             if (_observed?.Cap is int previous && read.Cap > previous)
                 _advisor.State["housingPending"] = false;
-            if (read.Age is int age && age == _candidateAge &&
-                age == _advisor.State["age"]!.GetValue<int>() + 1)
-                _advisor.SetAge(age);
+            if (read.Age is int age && age == _candidateAge) _advisor.ObserveAge(age);
             _candidateAge = read.Age;
             _observed = read;
-            _status.Text = $"HUD ao vivo · {DateTime.Now:HH:mm:ss}";
-            _hud.Text = FormatHud(read);
+            _status.Text = $"HUD ao vivo · {(automatic ? "automático" : "layout personalizado")} · {DateTime.Now:HH:mm:ss}";
+            _hud.Text = FormatHud(read with { Age = null });
             RefreshAdvice();
         }
         catch (Exception error)
@@ -213,14 +212,28 @@ internal sealed class MainForm : Form
 
     private void RefreshAdvice()
     {
+        if (!_advisor.AgeKnown)
+        {
+            _age.Text = "Era atual · aguardando confirmação";
+            _action.Text = "Identificando a era da partida";
+            _reason.Text = "Com a barra do jogo visível, o helper procura o medalhão da era. Você também pode informar a era em Partida.";
+            _economy.Text = "Aguardando a era";
+            _economyReason.Text = _army.Text = _attack.Text = "";
+            _markAction = null;
+            _mark.Visible = _completed.Visible = false;
+            return;
+        }
+
+        string[] ages = ["I · Arcaica", "II · Clássica", "III · Heroica", "IV · Mítica", "V · Maravilha"];
+        _age.Text = $"Era atual · {ages[_advisor.State["age"]!.GetValue<int>() - 1]}";
         var result = _advisor.Recommend(_observed);
         var next = result["next"]!;
         var economics = result["economy"]!;
         var attack = result["attack"]!;
         _action.Text = TextOf(next, "title");
         _reason.Text = TextOf(next, "reason");
-        _economy.Text = string.Join("    ", new[] { "Comida", "Madeira", "Ouro" }.Select((name, index) =>
-            $"{name} {economics["percentages"]![index]}% ({economics["counts"]![index]})"));
+        _economy.Text = string.Join("  ·  ", new[] { "Comida", "Madeira", "Ouro" }.Select((name, index) =>
+            $"{name} {economics["points"]![index]}"));
         _economyReason.Text = TextOf(economics, "reason");
         var lines = result["plan"]!.AsArray().Select(unit =>
             $"{unit!["name"]}  {unit["current"]}/{unit["target"]}  ·  {unit["building"]}");

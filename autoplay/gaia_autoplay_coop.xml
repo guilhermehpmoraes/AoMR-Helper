@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapinfo
+    displayName="Gaia Autoplay"
+    detailsText="Gaia Autoplay: equipes, numericamente desigual ou todos contra todos."
+    imagepath="resources\maps\map_picker\alfheim.png"
+    loadBackground="resources\maps\previews\alfheim.png"
+    landmap="">
+</mapinfo>

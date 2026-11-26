@@ -9,6 +9,7 @@ internal sealed class Advisor
     internal JsonObject State { get; private set; } = new();
     internal JsonObject Checkpoints { get; }
     internal JsonObject Done => State["done"]!.AsObject();
+    internal bool AgeKnown { get; private set; }
 
     internal Advisor()
     {
@@ -27,7 +28,11 @@ internal sealed class Advisor
         Reset();
     }
 
-    internal void Reset() => State = Evaluate("JSON.stringify(GaiaAdvisor.initial)");
+    internal void Reset()
+    {
+        State = Evaluate("JSON.stringify(GaiaAdvisor.initial)");
+        AgeKnown = false;
+    }
 
     internal JsonObject Recommend(HudReading? hud)
     {
@@ -46,11 +51,17 @@ internal sealed class Advisor
 
     internal void SetAge(int age)
     {
+        AgeKnown = true;
         if (State["age"]!.GetValue<int>() == age) return;
         State["age"] = age;
         State["advance"] = "saving";
         Done["infantryTech"] = false;
         Done["rangedTech"] = false;
+    }
+
+    internal void ObserveAge(int age)
+    {
+        if (!AgeKnown || age >= State["age"]!.GetValue<int>()) SetAge(age);
     }
 
     internal void Mark(string key)
